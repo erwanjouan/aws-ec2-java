@@ -1,6 +1,10 @@
-# aws-codebuild-springboot
+# aws-ec2-java
 
-Makefile with AWS CodeBuild / CodeDeploy primitives for Maven/Java11 project, deployed on EC2 instances in ASG.
+Exposes a [makefile](./Infrastructure.mk) with AWS CodeBuild / CodeDeploy primitives for
+ - Maven and Java 11 project
+ - Deployed on EC2 instances in ASG behind ALB.
+
+## Usage
 
 ````sh
 make init
