@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  ProjectName:
+    Type: String
+  ArtifactBucketName:
+    Type: String
+  CacheBucket:
+    Type: String
+
+Resources:
+  ArtifactBucket:
+    Properties:
+      BucketName: !Ref ArtifactBucketName
+    Type: AWS::S3::Bucket
+  CodeBuildRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: allow-to-push-to-S3
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:List*
+                Resource:
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}/*"
+                  - !Sub "arn:aws:s3:::${CacheBucket}"
+                  - !Sub "arn:aws:s3:::${CacheBucket}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                  - logs:PutLogEvents
+                  - logs:PutRetentionPolicy
+                Resource: "arn:aws:logs:*"
+    Type: AWS::IAM::Role
+
+  CodeBuildJavaProject:
+    DependsOn: CodeBuildRole
+    Properties:
+      Name: !Ref ProjectName
+      ServiceRole: !Ref CodeBuildRole
+      Source:
+        Type: GITHUB
+        Location: "https://github.com/erwanjouan/aws-codebuild-springboot.git"
+      SourceVersion: main
+      Artifacts:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/java:openjdk-11
+        Type: LINUX_CONTAINER
+      Cache:
+        Location: !Ref CacheBucket
+        Type: S3
+    Type: AWS::CodeBuild::Project

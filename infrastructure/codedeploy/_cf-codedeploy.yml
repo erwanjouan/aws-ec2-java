@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  VpcId:
+    Type: String
+    Default: vpc-c7a4f5a0
+  ALBSubnets:
+    Type: CommaDelimitedList
+    Default: subnet-50237719, subnet-57cc420c, subnet-a47735c3
+  MinSize:
+    Type: Number
+    Default: 4
+  MaxSize:
+    Type: Number
+    Default: 8
+  AmiId:
+    Type: String
+    Default: ami-0d1bf5b68307103c2
+  KeyName:
+    Type: String
+    Default: eksworkshop
+  ProjectName:
+    Type: String
+
+Resources:
+  Ec2CodeDeployRole:
+    Properties:
+      Description: Provides full access to CodeDeploy resources.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeDeployFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Path: /
+    Type: "AWS::IAM::Role"
+  CodeDeployer:
+    Properties:
+      Description: Provides CodeDeploy service access to expand tags and interact with Auto Scaling on your behalf.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codedeploy.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+      Path: /
+    Type: AWS::IAM::Role
+  CodeDeployApplication:
+    Properties:
+      ApplicationName: !Ref ProjectName
+    Type: AWS::CodeDeploy::Application
+  CodeDeployDeploymentGroup:
+    Properties:
+      ApplicationName: !Ref ProjectName
+      ServiceRoleArn: !GetAtt CodeDeployer.Arn
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      DeploymentGroupName: !Ref ProjectName
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+          - Name: !GetAtt ALBTargetGroup.TargetGroupName
+      AutoScalingGroups:
+          - Ref: AutoScalingGroup
+    Type: AWS::CodeDeploy::DeploymentGroup
+  ALBSecurityGroup:
+    Properties:
+      GroupDescription: allow access to ALB from internet
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+    Type: AWS::EC2::SecurityGroup
+  ApplicationLoadBalancer:
+    Properties:
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '30'
+      Subnets: !Ref ALBSubnets
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+  ALBListener:
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn:
+        Ref: ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+    Type: AWS::ElasticLoadBalancingV2::Listener
+  ALBTargetGroup:
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      UnhealthyThresholdCount: 2
+      HealthyThresholdCount: 2
+      HealthCheckPath: /actuator/health
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  AutoScalingGroup:
+    Properties:
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      MinSize:
+        Ref: MinSize
+      MaxSize:
+        Ref: MaxSize
+      LaunchConfigurationName:
+        Ref: SpringBootLaunchConfig
+      VPCZoneIdentifier: !Ref ALBSubnets
+      TargetGroupARNs:
+        - Ref: ALBTargetGroup
+      Tags:
+        - Key: Name
+          Value: webapp-example
+          PropagateAtLaunch: true
+    Type: AWS::AutoScaling::AutoScalingGroup
+  SpringBootLaunchConfig:
+    Properties:
+      AssociatePublicIpAddress: true
+      ImageId: !Ref AmiId
+      InstanceType: t2.small
+      KeyName:
+        Ref: KeyName
+      SecurityGroups:
+        - Ref: WebappSecurityGroup
+      IamInstanceProfile:
+        Ref: WebappInstanceProfile
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash -xe
+
+          ## Code Deploy Agent Bootstrap Script##
+
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+          AUTOUPDATE=false
+
+          function installdep(){
+
+          if [ ${PLAT} = "ubuntu" ]; then
+
+            apt-get -y update
+            # Satisfying even ubuntu older versions.
+            apt-get -y install jq awscli ruby2.0 || apt-get -y install jq awscli ruby
+
+          elif [ ${PLAT} = "amz" ]; then
+            yum -y update
+            yum install -y aws-cli ruby jq
+
+          fi
+
+          }
+
+          function platformize(){
+
+          #Linux OS detection#
+           if hash lsb_release; then
+             echo "Ubuntu server OS detected"
+             export PLAT="ubuntu"
+
+
+          elif hash yum; then
+            echo "Amazon Linux detected"
+            export PLAT="amz"
+
+           else
+             echo "Unsupported release"
+             exit 1
+
+           fi
+          }
+
+
+          function execute(){
+
+          if [ ${PLAT} = "ubuntu" ]; then
+
+            cd /tmp/
+            wget https://aws-codedeploy-${REGION}.s3.amazonaws.com/latest/install
+            chmod +x ./install
+
+            if ./install auto; then
+              echo "Instalation completed"
+                if ! ${AUTOUPDATE}; then
+                      echo "Disabling Auto Update"
+                      sed -i '/@reboot/d' /etc/cron.d/codedeploy-agent-update
+                      chattr +i /etc/cron.d/codedeploy-agent-update
+                      rm -f /tmp/install
+                fi
+              exit 0
+            else
+              echo "Instalation script failed, please investigate"
+              rm -f /tmp/install
+              exit 1
+            fi
+
+          elif [ ${PLAT} = "amz" ]; then
+
+            cd /tmp/
+            wget https://aws-codedeploy-${REGION}.s3.amazonaws.com/latest/install
+            chmod +x ./install
+
+              if ./install auto; then
+                echo "Instalation completed"
+                  if ! ${AUTOUPDATE}; then
+                      echo "Disabling auto update"
+                      sed -i '/@reboot/d' /etc/cron.d/codedeploy-agent-update
+                      chattr +i /etc/cron.d/codedeploy-agent-update
+                      rm -f /tmp/install
+                  fi
+                exit 0
+              else
+                echo "Instalation script failed, please investigate"
+                rm -f /tmp/install
+                exit 1
+              fi
+
+          else
+            echo "Unsupported platform ''${PLAT}''"
+          fi
+
+          }
+
+          platformize
+          installdep
+          REGION=$(curl -s 169.254.169.254/latest/dynamic/instance-identity/document | jq -r ".region")
+          execute
+    Type: AWS::AutoScaling::LaunchConfiguration
+  WebappSecurityGroup:
+    Properties:
+      GroupDescription: allow access to Webapp from ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId:
+            Ref: ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+    Type: AWS::EC2::SecurityGroup
+  WebappInstanceProfile:
+    Properties:
+      Roles:
+        - !Ref Ec2CodeDeployRole
+    Type: AWS::IAM::InstanceProfile
+
+Outputs:
+  ApplicationLoadBalancerDns:
+    Description: The URL of the ALB
+    Value: !GetAtt ApplicationLoadBalancer.DNSName

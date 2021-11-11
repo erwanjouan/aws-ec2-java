@@ -1,0 +1,28 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto11
+    commands:
+      - java -version
+  build:
+    commands:
+      - echo Build started on `date`
+      - mvn clean install
+  post_build:
+    commands:
+      - mkdir build-output/
+      - cp target/*.jar build-output/app.jar
+      - cp infrastructure/codedeploy/appspec.yml build-output/
+      - cp infrastructure/codedeploy/*.sh build-output/
+      - cd build-output/ && zip -qr build-output.zip ./*
+      - mv build-output.zip ../
+      - echo Build completed on `date`
+artifacts:
+  files:
+    - build-output.zip
+  discard-paths: yes
+cache:
+  paths:
+    - '/root/.m2/**/*'
