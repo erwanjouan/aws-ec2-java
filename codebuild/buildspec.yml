@@ -6,6 +6,10 @@ phases:
       java: corretto11
     commands:
       - java -version
+  pre_build:
+    commands:
+      - echo Dump file system
+      - ls -ltR
   build:
     commands:
       - echo Build started on `date`
