@@ -55,6 +55,8 @@ Resources:
       Source:
         Type: GITHUB
         Location: "https://github.com/erwanjouan/aws-codebuild-springboot.git"
+        GitSubmodulesConfig:
+          FetchSubmodules: True
       SourceVersion: main
       Artifacts:
         Type: S3
